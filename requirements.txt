@@ -1,4 +1,5 @@
 streamlit
+fastapi
 langchain
 langchain-community
 langchain-huggingface
