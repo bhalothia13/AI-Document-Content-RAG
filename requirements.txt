@@ -1,10 +1,13 @@
-streamlit
+fastapi
+uvicorn
+python-multipart
 langchain
 langchain-community
 langchain-huggingface
 langchain-text-splitters
 pypdf
-faiss-cpu
-python-dotenv
-google-generativeai
 sentence-transformers
+faiss-cpu
+transformers
+torch
+accelerate
