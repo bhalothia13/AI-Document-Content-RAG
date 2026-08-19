@@ -1,55 +1,135 @@
 import os
 
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
-from langchain_huggingface import HuggingFaceEndpoint
+from huggingface_hub import InferenceClient
 from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
 
+
+# ============================================================
+# MODELS
+# ============================================================
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-LLM_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 
+LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+
+
+# ============================================================
+# HUGGING FACE CLIENT
+# ============================================================
+
+def get_hf_client():
+    token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
+    if not token:
+        raise ValueError(
+            "HUGGINGFACEHUB_API_TOKEN is not configured"
+        )
+
+    return InferenceClient(
+        api_key=token
+    )
+
+
+# ============================================================
+# CREATE EMBEDDINGS USING HUGGING FACE API
+# ============================================================
+
+class HuggingFaceAPIEmbeddings:
+
+    def __init__(self, model):
+        self.model = model
+        self.client = get_hf_client()
+
+    def embed_documents(self, texts):
+        embeddings = []
+
+        for text in texts:
+            result = self.client.feature_extraction(
+                text,
+                model=self.model
+            )
+
+            # Convert numpy array/list to normal Python list
+            if hasattr(result, "tolist"):
+                result = result.tolist()
+
+            # Some models can return nested arrays
+            if result and isinstance(result[0], list):
+                result = result[0]
+
+            embeddings.append(result)
+
+        return embeddings
+
+    def embed_query(self, text):
+        result = self.client.feature_extraction(
+            text,
+            model=self.model
+        )
+
+        if hasattr(result, "tolist"):
+            result = result.tolist()
+
+        if result and isinstance(result[0], list):
+            result = result[0]
+
+        return result
+
+
+# ============================================================
+# CREATE EMBEDDINGS
+# ============================================================
 
 def create_embeddings():
-    api_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
-    if not api_token:
-        raise ValueError("HUGGINGFACEHUB_API_TOKEN is not configured")
-
-    return HuggingFaceInferenceAPIEmbeddings(
-        api_key=api_token,
-        model_name=EMBEDDING_MODEL
+    return HuggingFaceAPIEmbeddings(
+        model=EMBEDDING_MODEL
     )
 
+
+# ============================================================
+# CREATE VECTOR STORE
+# ============================================================
 
 def create_vectorstore(chunks):
+
     embeddings = create_embeddings()
-    return FAISS.from_documents(chunks, embeddings)
 
-
-def load_llm():
-    api_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-
-    if not api_token:
-        raise ValueError("HUGGINGFACEHUB_API_TOKEN is not configured")
-
-    return HuggingFaceEndpoint(
-        repo_id=LLM_MODEL,
-        huggingfacehub_api_token=api_token,
-        task="text-generation",
-        temperature=0.1,
-        max_new_tokens=256
+    vectorstore = FAISS.from_documents(
+        chunks,
+        embeddings
     )
 
+    return vectorstore
+
+
+# ============================================================
+# LLM
+# ============================================================
+
+def load_llm():
+
+    client = get_hf_client()
+
+    return client
+
+
+# ============================================================
+# PROMPT
+# ============================================================
 
 def create_prompt():
-    template = """You are an AI document assistant.
 
-Use ONLY the context below to answer the question.
+    return """You are an AI document assistant.
 
-If the answer is not available in the context, say that you could not find the answer.
+Answer the user's question using ONLY the context provided below.
 
-Do not use outside knowledge.
+Rules:
+1. Do not use outside knowledge.
+2. If the answer is not present in the context, say:
+   "I could not find the answer in the document."
+3. Give a clear and concise answer.
 
 Context:
 {context}
@@ -57,21 +137,29 @@ Context:
 Question:
 {question}
 
-Answer:"""
+Answer:
+"""
 
-    return PromptTemplate(
-        template=template,
-        input_variables=["context", "question"]
-    )
 
+# ============================================================
+# ASK QUESTION
+# ============================================================
 
 def ask_question(vectorstore, llm, question):
-    docs = vectorstore.similarity_search(question, k=4)
 
-    context = "\n\n".join(
-        doc.page_content for doc in docs
+    # Find relevant documents
+    docs = vectorstore.similarity_search(
+        question,
+        k=4
     )
 
+    # Build context
+    context = "\n\n".join(
+        doc.page_content
+        for doc in docs
+    )
+
+    # Create prompt
     prompt = create_prompt()
 
     final_prompt = prompt.format(
@@ -79,6 +167,13 @@ def ask_question(vectorstore, llm, question):
         question=question
     )
 
-    response = llm.invoke(final_prompt)
+    # Call Hugging Face API
+    response = llm.text_generation(
+        final_prompt,
+        model=LLM_MODEL,
+        max_new_tokens=256,
+        temperature=0.1,
+        return_full_text=False
+    )
 
     return response, docs
