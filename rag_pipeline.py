@@ -1,179 +1,194 @@
 import os
-
+import math
 from huggingface_hub import InferenceClient
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
 
 
-# ============================================================
-# MODELS
-# ============================================================
+# =========================
+# Hugging Face Models
+# =========================
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+# Small model for serverless deployment
+LLM_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
-# ============================================================
-# HUGGING FACE CLIENT
-# ============================================================
+# =========================
+# Hugging Face Client
+# =========================
 
 def get_hf_client():
     token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
     if not token:
-        raise ValueError(
-            "HUGGINGFACEHUB_API_TOKEN is not configured"
+        raise RuntimeError(
+            "HUGGINGFACEHUB_API_TOKEN environment variable is missing."
         )
 
     return InferenceClient(
+        provider="hf-inference",
         api_key=token
     )
 
 
-# ============================================================
-# CREATE EMBEDDINGS USING HUGGING FACE API
-# ============================================================
+# =========================
+# Generate Embedding
+# =========================
 
-class HuggingFaceAPIEmbeddings:
+def create_embedding(text):
+    client = get_hf_client()
 
-    def __init__(self, model):
-        self.model = model
-        self.client = get_hf_client()
-
-    def embed_documents(self, texts):
-        embeddings = []
-
-        for text in texts:
-            result = self.client.feature_extraction(
-                text,
-                model=self.model
-            )
-
-            # Convert numpy array/list to normal Python list
-            if hasattr(result, "tolist"):
-                result = result.tolist()
-
-            # Some models can return nested arrays
-            if result and isinstance(result[0], list):
-                result = result[0]
-
-            embeddings.append(result)
-
-        return embeddings
-
-    def embed_query(self, text):
-        result = self.client.feature_extraction(
-            text,
-            model=self.model
-        )
-
-        if hasattr(result, "tolist"):
-            result = result.tolist()
-
-        if result and isinstance(result[0], list):
-            result = result[0]
-
-        return result
-
-
-# ============================================================
-# CREATE EMBEDDINGS
-# ============================================================
-
-def create_embeddings():
-
-    return HuggingFaceAPIEmbeddings(
+    embedding = client.feature_extraction(
+        text,
         model=EMBEDDING_MODEL
     )
 
+    # Convert numpy-like output to normal Python list
+    if hasattr(embedding, "tolist"):
+        embedding = embedding.tolist()
 
-# ============================================================
-# CREATE VECTOR STORE
-# ============================================================
+    # Some models may return nested output
+    if embedding and isinstance(embedding[0], list):
+        embedding = embedding[0]
+
+    return embedding
+
+
+# =========================
+# Create Vector Store
+# =========================
 
 def create_vectorstore(chunks):
 
-    embeddings = create_embeddings()
+    documents = []
 
-    vectorstore = FAISS.from_documents(
-        chunks,
-        embeddings
+    for chunk in chunks:
+
+        text = chunk.page_content
+
+        vector = create_embedding(text)
+
+        documents.append({
+            "text": text,
+            "embedding": vector,
+            "metadata": getattr(chunk, "metadata", {})
+        })
+
+    return documents
+
+
+# =========================
+# Cosine Similarity
+# =========================
+
+def cosine_similarity(a, b):
+
+    dot = sum(x * y for x, y in zip(a, b))
+
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+
+    if norm_a == 0 or norm_b == 0:
+        return 0
+
+    return dot / (norm_a * norm_b)
+
+
+# =========================
+# Retrieve Relevant Chunks
+# =========================
+
+def retrieve_documents(vectorstore, question, k=4):
+
+    question_embedding = create_embedding(question)
+
+    scored_documents = []
+
+    for document in vectorstore:
+
+        score = cosine_similarity(
+            question_embedding,
+            document["embedding"]
+        )
+
+        scored_documents.append(
+            (score, document)
+        )
+
+    scored_documents.sort(
+        key=lambda x: x[0],
+        reverse=True
     )
 
-    return vectorstore
+    return [
+        document
+        for score, document in scored_documents[:k]
+    ]
 
 
-# ============================================================
-# LLM
-# ============================================================
+# =========================
+# Load LLM
+# =========================
 
 def load_llm():
 
-    client = get_hf_client()
-
-    return client
+    return get_hf_client()
 
 
-# ============================================================
-# PROMPT
-# ============================================================
-
-def create_prompt():
-
-    return """You are an AI document assistant.
-
-Answer the user's question using ONLY the context provided below.
-
-Rules:
-1. Do not use outside knowledge.
-2. If the answer is not present in the context, say:
-   "I could not find the answer in the document."
-3. Give a clear and concise answer.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-"""
-
-
-# ============================================================
-# ASK QUESTION
-# ============================================================
+# =========================
+# Ask Question
+# =========================
 
 def ask_question(vectorstore, llm, question):
 
-    # Find relevant documents
-    docs = vectorstore.similarity_search(
+    docs = retrieve_documents(
+        vectorstore,
         question,
         k=4
     )
 
-    # Build context
     context = "\n\n".join(
-        doc.page_content
-        for doc in docs
+        document["text"]
+        for document in docs
     )
 
-    # Create prompt
-    prompt = create_prompt()
+    prompt = f"""
+You are an AI document assistant.
 
-    final_prompt = prompt.format(
-        context=context,
-        question=question
-    )
+You must answer ONLY using the information present in the context.
 
-    # Call Hugging Face API
-    response = llm.text_generation(
-        final_prompt,
+If the answer is not present in the context,
+say:
+
+"I could not find the answer in the uploaded document."
+
+Do not use outside knowledge.
+
+CONTEXT:
+{context}
+
+QUESTION:
+{question}
+
+ANSWER:
+"""
+
+    response = llm.chat.completions.create(
         model=LLM_MODEL,
-        max_new_tokens=256,
+        messages=[
+            {
+                "role": "system",
+                "content": "You answer questions using only the provided document context."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
         temperature=0.1,
-        return_full_text=False
+        max_tokens=256
     )
 
-    return response, docs
+    answer = response.choices[0].message.content
+
+    return answer, docs
