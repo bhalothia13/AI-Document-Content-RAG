@@ -12,4 +12,4 @@ huggingface-hub
 
 faiss-cpu
 pypdf
-sentence-transformers
+
