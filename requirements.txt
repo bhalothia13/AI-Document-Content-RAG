@@ -7,9 +7,8 @@ requests
 langchain
 langchain-core
 langchain-community
-langchain-huggingface
+
 huggingface-hub
 
 faiss-cpu
 pypdf
-
