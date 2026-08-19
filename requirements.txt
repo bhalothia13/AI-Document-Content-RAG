@@ -9,3 +9,8 @@ faiss-cpu
 transformers
 torch
 accelerate
+streamlit
+langchain
+google-generativeai
+faiss-cpu
+python-dotenv
