@@ -5,7 +5,6 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 from document_processor import process_pdf
 
-# Hugging Face Cloud API Models
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 LLM_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 
@@ -67,39 +66,3 @@ def ask_question(vectorstore, llm, question):
 
     response = llm.invoke(final_prompt)
     return response, docs
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-
-    print("Loading PDF...")
-    pdf_path = Path(
-        r"C:\Users\Sumit\OneDrive\Desktop\AI-Document-RAG\dl-curriculum.pdf"
-    )
-
-    chunks = process_pdf(pdf_path)
-    print(f"Total chunks: {len(chunks)}")
-
-    print("\nCreating embeddings via Hugging Face API...")
-    vectorstore = create_vectorstore(chunks)
-    print("Vector database created successfully!")
-
-    print("\nConnecting to Hugging Face LLM API...")
-    llm = load_llm()
-    print("LLM connected successfully!")
-
-    question = input("\nAsk a question about your PDF: ")
-
-    response, docs = ask_question(vectorstore, llm, question)
-
-    print("\n==============================")
-    print("ANSWER")
-    print("==============================")
-    print(response)
-
-    print("\n==============================")
-    print("SOURCES")
-    print("==============================")
-    for doc in docs:
-        page = doc.metadata.get("page", "Unknown")
-        print(f"Page: {page + 1 if isinstance(page, int) else page}")
