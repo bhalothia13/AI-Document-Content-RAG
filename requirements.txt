@@ -13,3 +13,5 @@ huggingface-hub
 
 faiss-cpu
 pypdf
+streamlit
+requests
