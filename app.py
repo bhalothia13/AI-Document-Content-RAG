@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-# Updated Vercel Backend URL
+# Live Vercel Backend URL
 API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
 
 st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
@@ -28,7 +28,7 @@ if uploaded_file:
                     st.session_state.filename = uploaded_file.name
                     st.success("Document uploaded and processed successfully!")
                 else:
-                    st.error(f"Failed to process: {res.text}")
+                    st.error(f"Failed to process ({res.status_code}): {res.text}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
@@ -49,11 +49,20 @@ if st.button("Submit Question"):
         with st.spinner("Analyzing context & fetching answer..."):
             try:
                 res = requests.post(f"{API_URL}/chat", data={"question": question})
+                
                 if res.status_code == 200:
-                    data = res.json()
-                    st.subheader("Answer:")
-                    st.write(data.get("answer", data))
+                    try:
+                        data = res.json()
+                        st.subheader("Answer:")
+                        if isinstance(data, dict):
+                            st.write(data.get("answer", data))
+                        else:
+                            st.write(data)
+                    except Exception:
+                        st.subheader("Answer:")
+                        st.write(res.text)
                 else:
-                    st.error(f"Error: {res.text}")
+                    st.error(f"Backend Server Error ({res.status_code}): {res.text}")
+                    
             except Exception as e:
                 st.error(f"Connection error: {e}")
