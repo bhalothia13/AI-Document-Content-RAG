@@ -2,15 +2,14 @@ import os
 import math
 from huggingface_hub import InferenceClient
 
-
 # =========================
 # Hugging Face Models
 # =========================
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Chat model
-LLM_MODEL = "google/gemma-2-2b-it"
+# Reliable Serverless Chat Model
+LLM_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
 
 
 # =========================
@@ -25,8 +24,8 @@ def get_hf_client():
             "HUGGINGFACEHUB_API_TOKEN environment variable is missing."
         )
 
+    # Note: provider="auto" removed here to prevent routing errors
     return InferenceClient(
-        provider="auto",
         api_key=token
     )
 
@@ -43,11 +42,9 @@ def create_embedding(text):
         model=EMBEDDING_MODEL
     )
 
-    # Convert numpy-like output to normal Python list
     if hasattr(embedding, "tolist"):
         embedding = embedding.tolist()
 
-    # Some models may return nested output
     if embedding and isinstance(embedding[0], list):
         embedding = embedding[0]
 
@@ -59,21 +56,15 @@ def create_embedding(text):
 # =========================
 
 def create_vectorstore(chunks):
-
     documents = []
-
     for chunk in chunks:
-
         text = chunk.page_content
-
         vector = create_embedding(text)
-
         documents.append({
             "text": text,
             "embedding": vector,
             "metadata": getattr(chunk, "metadata", {})
         })
-
     return documents
 
 
@@ -82,16 +73,9 @@ def create_vectorstore(chunks):
 # =========================
 
 def cosine_similarity(a, b):
-
     dot = sum(x * y for x, y in zip(a, b))
-
-    norm_a = math.sqrt(
-        sum(x * x for x in a)
-    )
-
-    norm_b = math.sqrt(
-        sum(y * y for y in b)
-    )
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
 
     if norm_a == 0 or norm_b == 0:
         return 0
@@ -104,31 +88,19 @@ def cosine_similarity(a, b):
 # =========================
 
 def retrieve_documents(vectorstore, question, k=4):
-
     question_embedding = create_embedding(question)
-
     scored_documents = []
 
     for document in vectorstore:
-
         score = cosine_similarity(
             question_embedding,
             document["embedding"]
         )
+        scored_documents.append((score, document))
 
-        scored_documents.append(
-            (score, document)
-        )
+    scored_documents.sort(key=lambda x: x[0], reverse=True)
 
-    scored_documents.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
-
-    return [
-        document
-        for score, document in scored_documents[:k]
-    ]
+    return [document for score, document in scored_documents[:k]]
 
 
 # =========================
@@ -144,7 +116,6 @@ def load_llm():
 # =========================
 
 def ask_question(vectorstore, llm, question):
-
     docs = retrieve_documents(
         vectorstore,
         question,
