@@ -25,7 +25,6 @@ def home():
 async def upload_file(file: UploadFile = File(...)):
     try:
         contents = await file.read()
-        # Vercel safe temp file creation
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
