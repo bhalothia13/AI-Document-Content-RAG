@@ -1,59 +1,44 @@
-import streamlit as st
-import requests
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import os
 
-# Live Vercel Backend URL
-API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
+# Import your document processing & RAG functions
+from document_processor import process_document
+from rag_pipeline import answer_question
 
-st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
-st.title("📄 AI Document Intelligence RAG")
+app = FastAPI()
 
-# Session State Initialization
-if "uploaded" not in st.session_state:
-    st.session_state.uploaded = False
-if "filename" not in st.session_state:
-    st.session_state.filename = ""
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# 1. Document Upload Section
-st.header("1. Document Upload")
-uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
+@app.get("/")
+def home():
+    return {"status": "FastAPI Backend is Running"}
 
-if uploaded_file:
-    if st.button("Upload Document"):
-        with st.spinner("Processing & Indexing Document... Please wait."):
-            files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-            try:
-                res = requests.post(f"{API_URL}/upload", files=files)
-                if res.status_code == 200:
-                    st.session_state.uploaded = True
-                    st.session_state.filename = uploaded_file.name
-                    st.success("Document uploaded and processed successfully!")
-                else:
-                    st.error(f"Upload Error ({res.status_code}): {res.text[:200]}")
-            except Exception as e:
-                st.error(f"Connection error: {e}")
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        file_path = f"/tmp/{file.filename}"
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Process and index the document
+        process_document(file_path)
+        return {"status": "success", "message": "Document processed successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
-# Display Active File Status
-if st.session_state.uploaded:
-    st.info(f"Active Document: **{st.session_state.filename}**")
-
-# 2. Ask Question Section
-st.header("2. Ask Question")
-question = st.text_input("Enter your question:")
-
-if st.button("Submit Question"):
-    if not st.session_state.uploaded:
-        st.warning("Pehle koi document upload karein!")
-    elif not question.strip():
-        st.warning("Please enter a valid question.")
-    else:
-        with st.spinner("Analyzing context & fetching answer..."):
-            try:
-                res = requests.post(f"{API_URL}/chat", data={"question": question})
-                if res.status_code == 200:
-                    data = res.json()
-                    st.subheader("Answer:")
-                    st.write(data.get("answer", data))
-                else:
-                    st.error(f"Backend Error ({res.status_code}): Vercel backend route not found.")
-            except Exception as e:
-                st.error(f"Connection error: {e}")
+@app.post("/chat")
+async def chat(question: str = Form(...)):
+    try:
+        response = answer_question(question)
+        return {"answer": response}
+    except Exception as e:
+        return {"answer": f"Error: {str(e)}"}
