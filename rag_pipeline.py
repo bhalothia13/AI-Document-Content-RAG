@@ -9,10 +9,6 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 LLM_MODEL = "microsoft/Phi-3-mini-4k-instruct"
 
-# Reliable Serverless Chat Model
-#LLM_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
-
-
 # =========================
 # Hugging Face Client
 # =========================
