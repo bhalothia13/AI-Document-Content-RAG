@@ -20,7 +20,7 @@ from document_processor import process_pdf
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-LLM_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
 
 def create_embeddings():
