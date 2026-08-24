@@ -3,15 +3,10 @@ mangum
 pydantic
 python-dotenv
 requests
-
 python-multipart
-
 langchain
 langchain-core
 langchain-community
 huggingface-hub
-
-faiss-cpu
 pypdf
-streamlit
-requests
+chromadb
