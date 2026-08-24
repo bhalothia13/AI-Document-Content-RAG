@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 
-# Live Vercel Backend URL
-API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
+# Fixed Vercel Backend URL (Added /api to hit FastAPI correctly)
+BASE_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
+API_URL = BASE_URL.rstrip('/')
 
 st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
 st.title("📄 AI Document Intelligence RAG")
@@ -22,13 +23,19 @@ if uploaded_file:
         with st.spinner("Processing & Indexing Document... Please wait."):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
             try:
+                # Primary API endpoint call
                 res = requests.post(f"{API_URL}/upload", files=files)
+                
+                # Fallback check for /api prefix if standard route returns 404 HTML
+                if res.status_code == 404 or res.text.startswith("<!DOCTYPE"):
+                    res = requests.post(f"{API_URL}/api/upload", files=files)
+
                 if res.status_code == 200:
                     st.session_state.uploaded = True
                     st.session_state.filename = uploaded_file.name
                     st.success("Document uploaded and processed successfully!")
                 else:
-                    st.error(f"Failed to process ({res.status_code}): {res.text}")
+                    st.error(f"Failed to process ({res.status_code}): {res.text[:300]}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
@@ -48,8 +55,13 @@ if st.button("Submit Question"):
     else:
         with st.spinner("Analyzing context & fetching answer..."):
             try:
+                # Primary API endpoint call
                 res = requests.post(f"{API_URL}/chat", data={"question": question})
                 
+                # Fallback check for /api path
+                if res.status_code == 404 or res.text.startswith("<!DOCTYPE"):
+                    res = requests.post(f"{API_URL}/api/chat", data={"question": question})
+
                 if res.status_code == 200:
                     try:
                         data = res.json()
@@ -62,7 +74,7 @@ if st.button("Submit Question"):
                         st.subheader("Answer:")
                         st.write(res.text)
                 else:
-                    st.error(f"Backend Server Error ({res.status_code}): {res.text}")
+                    st.error(f"Backend Error ({res.status_code}): {res.text[:300]}")
                     
             except Exception as e:
                 st.error(f"Connection error: {e}")
