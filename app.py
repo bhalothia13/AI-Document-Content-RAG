@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
 
-API_URL = "https://ai-document-content-rags.vercel.app"
+# Updated Vercel Backend URL
+API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
 
 st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
 st.title("📄 AI Document Intelligence RAG")
@@ -18,7 +19,6 @@ uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
 
 if uploaded_file:
     if st.button("Upload Document"):
-        # Status Spinner & Message
         with st.spinner("Processing & Indexing Document... Please wait."):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
             try:
