@@ -9,8 +9,8 @@ from huggingface_hub import InferenceClient
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Small model for serverless deployment
-LLM_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+# Chat model
+LLM_MODEL = "google/gemma-2-2b-it"
 
 
 # =========================
@@ -26,7 +26,7 @@ def get_hf_client():
         )
 
     return InferenceClient(
-        provider="hf-inference",
+        provider="auto",
         api_key=token
     )
 
@@ -85,8 +85,13 @@ def cosine_similarity(a, b):
 
     dot = sum(x * y for x, y in zip(a, b))
 
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
+    norm_a = math.sqrt(
+        sum(x * x for x in a)
+    )
+
+    norm_b = math.sqrt(
+        sum(y * y for y in b)
+    )
 
     if norm_a == 0 or norm_b == 0:
         return 0
@@ -131,7 +136,6 @@ def retrieve_documents(vectorstore, question, k=4):
 # =========================
 
 def load_llm():
-
     return get_hf_client()
 
 
@@ -155,16 +159,16 @@ def ask_question(vectorstore, llm, question):
     prompt = f"""
 You are an AI document assistant.
 
-You must answer ONLY using the information present in the context.
+You must answer ONLY using the information present
+in the provided document context.
 
-If the answer is not present in the context,
-say:
+If the answer is not present in the context, say:
 
 "I could not find the answer in the uploaded document."
 
 Do not use outside knowledge.
 
-CONTEXT:
+DOCUMENT CONTEXT:
 {context}
 
 QUESTION:
@@ -178,7 +182,10 @@ ANSWER:
         messages=[
             {
                 "role": "system",
-                "content": "You answer questions using only the provided document context."
+                "content": (
+                    "You answer questions using only "
+                    "the provided document context."
+                )
             },
             {
                 "role": "user",
