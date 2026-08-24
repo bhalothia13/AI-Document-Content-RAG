@@ -10,10 +10,10 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # Pure serverless API ke liye working model:
 #LLM_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 # OR alternative option:
-# LLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+LLM_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 # Reliable Serverless Chat Model
-LLM_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+#LLM_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
 
 
 # =========================
