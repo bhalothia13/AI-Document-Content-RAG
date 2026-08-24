@@ -1,16 +1,20 @@
 import streamlit as st
 import requests
 
-API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
+# Fixed Vercel Backend URL (Added /api to hit FastAPI correctly)
+BASE_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
+API_URL = BASE_URL.rstrip('/')
 
 st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
 st.title("📄 AI Document Intelligence RAG")
 
+# Session State Initialization
 if "uploaded" not in st.session_state:
     st.session_state.uploaded = False
 if "filename" not in st.session_state:
     st.session_state.filename = ""
 
+# 1. Document Upload Section
 st.header("1. Document Upload")
 uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
 
@@ -19,26 +23,27 @@ if uploaded_file:
         with st.spinner("Processing & Indexing Document... Please wait."):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
             try:
+                # Primary API endpoint call
                 res = requests.post(f"{API_URL}/upload", files=files)
+                
+                # Fallback check for /api prefix if standard route returns 404 HTML
+                if res.status_code == 404 or res.text.startswith("<!DOCTYPE"):
+                    res = requests.post(f"{API_URL}/api/upload", files=files)
+
                 if res.status_code == 200:
-                    try:
-                        data = res.json()
-                        if data.get("status") == "success":
-                            st.session_state.uploaded = True
-                            st.session_state.filename = uploaded_file.name
-                            st.success("Document uploaded and processed successfully!")
-                        else:
-                            st.error(f"Backend Error: {data.get('message')}")
-                    except Exception:
-                        st.error(f"Server Error (200 OK but empty): {res.text}")
+                    st.session_state.uploaded = True
+                    st.session_state.filename = uploaded_file.name
+                    st.success("Document uploaded and processed successfully!")
                 else:
-                    st.error(f"HTTP Error {res.status_code}: {res.text[:300]}")
+                    st.error(f"Failed to process ({res.status_code}): {res.text[:300]}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
+# Display Active File Status
 if st.session_state.uploaded:
     st.info(f"Active Document: **{st.session_state.filename}**")
 
+# 2. Ask Question Section
 st.header("2. Ask Question")
 question = st.text_input("Enter your question:")
 
@@ -50,15 +55,26 @@ if st.button("Submit Question"):
     else:
         with st.spinner("Analyzing context & fetching answer..."):
             try:
+                # Primary API endpoint call
                 res = requests.post(f"{API_URL}/chat", data={"question": question})
+                
+                # Fallback check for /api path
+                if res.status_code == 404 or res.text.startswith("<!DOCTYPE"):
+                    res = requests.post(f"{API_URL}/api/chat", data={"question": question})
+
                 if res.status_code == 200:
                     try:
                         data = res.json()
                         st.subheader("Answer:")
-                        st.write(data.get("answer", data))
+                        if isinstance(data, dict):
+                            st.write(data.get("answer", data))
+                        else:
+                            st.write(data)
                     except Exception:
-                        st.error(f"Response empty string: {res.text}")
+                        st.subheader("Answer:")
+                        st.write(res.text)
                 else:
-                    st.error(f"HTTP Error {res.status_code}: {res.text[:300]}")
+                    st.error(f"Backend Error ({res.status_code}): {res.text[:300]}")
+                    
             except Exception as e:
                 st.error(f"Connection error: {e}")
