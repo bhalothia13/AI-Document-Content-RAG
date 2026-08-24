@@ -1,19 +1,16 @@
 import streamlit as st
 import requests
 
-# Live Vercel Backend URL
 API_URL = "https://bhalothia13-ai-document-content-git-main-bhalothia13s-projects.vercel.app"
 
 st.set_page_config(page_title="AI Document Intelligence RAG", page_icon="📄")
 st.title("📄 AI Document Intelligence RAG")
 
-# Session State Initialization
 if "uploaded" not in st.session_state:
     st.session_state.uploaded = False
 if "filename" not in st.session_state:
     st.session_state.filename = ""
 
-# 1. Document Upload Section
 st.header("1. Document Upload")
 uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
 
@@ -24,19 +21,24 @@ if uploaded_file:
             try:
                 res = requests.post(f"{API_URL}/upload", files=files)
                 if res.status_code == 200:
-                    st.session_state.uploaded = True
-                    st.session_state.filename = uploaded_file.name
-                    st.success("Document uploaded and processed successfully!")
+                    try:
+                        data = res.json()
+                        if data.get("status") == "success":
+                            st.session_state.uploaded = True
+                            st.session_state.filename = uploaded_file.name
+                            st.success("Document uploaded and processed successfully!")
+                        else:
+                            st.error(f"Backend Error: {data.get('message')}")
+                    except Exception:
+                        st.error(f"Server Error (200 OK but empty): {res.text}")
                 else:
-                    st.error(f"Upload Error ({res.status_code}): {res.text[:200]}")
+                    st.error(f"HTTP Error {res.status_code}: {res.text[:300]}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
-# Display Active File Status
 if st.session_state.uploaded:
     st.info(f"Active Document: **{st.session_state.filename}**")
 
-# 2. Ask Question Section
 st.header("2. Ask Question")
 question = st.text_input("Enter your question:")
 
@@ -50,10 +52,13 @@ if st.button("Submit Question"):
             try:
                 res = requests.post(f"{API_URL}/chat", data={"question": question})
                 if res.status_code == 200:
-                    data = res.json()
-                    st.subheader("Answer:")
-                    st.write(data.get("answer", data))
+                    try:
+                        data = res.json()
+                        st.subheader("Answer:")
+                        st.write(data.get("answer", data))
+                    except Exception:
+                        st.error(f"Response empty string: {res.text}")
                 else:
-                    st.error(f"Backend Error ({res.status_code}): Vercel backend route not found.")
+                    st.error(f"HTTP Error {res.status_code}: {res.text[:300]}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
