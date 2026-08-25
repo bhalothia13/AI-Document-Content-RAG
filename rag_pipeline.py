@@ -1,219 +1,389 @@
 import os
+import re
 
-from pathlib import Path
+from huggingface_hub import InferenceClient
 
-from pypdf import PdfReader
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-
-# ============================================================
-# TEXT CLEANING
-# ============================================================
-
-def clean_text(text):
-
-    if not text:
-        return ""
-
-    text = text.replace(
-        "\x00",
-        " "
-    )
-
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-    ]
-
-    lines = [
-        line
-        for line in lines
-        if line
-    ]
-
-    return "\n".join(lines)
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 # ============================================================
-# PDF LOADER
+# MODEL
 # ============================================================
 
-def load_pdf(file_path):
+# You can change this later from Vercel Environment Variables.
+#
+# IMPORTANT:
+# Do NOT load this model locally with transformers.
+#
+DEFAULT_MODEL = (
+    "Qwen/Qwen2.5-7B-Instruct"
+)
 
-    reader = PdfReader(
-        str(file_path)
-    )
 
-    documents = []
+# ============================================================
+# RAG STORE
+# ============================================================
 
-    for page_number, page in enumerate(
-        reader.pages
+class RAGStore:
+
+    def __init__(
+        self,
+        chunks
     ):
 
-        text = page.extract_text() or ""
+        if not chunks:
 
-        text = clean_text(
-            text
-        )
-
-        if text:
-
-            documents.append(
-                {
-                    "text": text,
-                    "page": page_number + 1
-                }
-            )
-
-    return documents
-
-
-# ============================================================
-# TXT LOADER
-# ============================================================
-
-def load_txt(file_path):
-
-    path = Path(
-        file_path
-    )
-
-    text = path.read_text(
-        encoding="utf-8",
-        errors="ignore"
-    )
-
-    text = clean_text(
-        text
-    )
-
-    if not text:
-        return []
-
-    return [
-        {
-            "text": text,
-            "page": 1
-        }
-    ]
-
-
-# ============================================================
-# TEXT CHUNKING
-# ============================================================
-
-def split_text(
-    text,
-    chunk_size=1200,
-    chunk_overlap=200
-):
-
-    text = text.strip()
-
-    if not text:
-        return []
-
-
-    chunks = []
-
-    start = 0
-
-    text_length = len(text)
-
-
-    while start < text_length:
-
-        end = min(
-            start + chunk_size,
-            text_length
-        )
-
-
-        chunk = text[
-            start:end
-        ].strip()
-
-
-        if chunk:
-
-            chunks.append(
-                chunk
+            raise ValueError(
+                "No document chunks were provided."
             )
 
 
-        if end >= text_length:
-            break
+        self.chunks = chunks
 
 
-        start = max(
-            end - chunk_overlap,
-            start + 1
+        self.texts = [
+            chunk["text"]
+            for chunk in chunks
+        ]
+
+
+        # ----------------------------------------------------
+        # TF-IDF vector database
+        # ----------------------------------------------------
+
+        self.vectorizer = TfidfVectorizer(
+            lowercase=True,
+            stop_words="english",
+            max_features=12000,
+            ngram_range=(1, 2)
         )
 
 
-    return chunks
+        self.matrix = self.vectorizer.fit_transform(
+            self.texts
+        )
 
 
 # ============================================================
-# COMPLETE DOCUMENT PROCESSOR
+# CREATE RAG STORE
 # ============================================================
 
-def process_document(
-    file_path,
-    extension
+def create_rag_store(
+    chunks
 ):
 
-    extension = extension.lower()
+    return RAGStore(
+        chunks
+    )
 
 
-    if extension == ".pdf":
+# ============================================================
+# RETRIEVE DOCUMENTS
+# ============================================================
 
-        documents = load_pdf(
-            file_path
+def retrieve_documents(
+    store,
+    question,
+    k=4
+):
+
+    question_vector = store.vectorizer.transform(
+        [question]
+    )
+
+
+    scores = cosine_similarity(
+        question_vector,
+        store.matrix
+    )[0]
+
+
+    ranked_indexes = scores.argsort()[::-1]
+
+
+    selected = []
+
+
+    for index in ranked_indexes[:k]:
+
+        score = float(
+            scores[index]
         )
 
-    elif extension == ".txt":
 
-        documents = load_txt(
-            file_path
+        if score <= 0:
+            continue
+
+
+        chunk = store.chunks[
+            int(index)
+        ]
+
+
+        selected.append(
+            {
+                "text": chunk["text"],
+                "page": chunk.get(
+                    "page",
+                    "Unknown"
+                ),
+                "score": score
+            }
         )
 
-    else:
 
-        raise ValueError(
-            "Unsupported file type."
+    return selected
+
+
+# ============================================================
+# HUGGING FACE CLIENT
+# ============================================================
+
+def get_hf_client():
+
+    token = os.getenv(
+        "HF_TOKEN"
+    )
+
+
+    if not token:
+
+        raise RuntimeError(
+            "HF_TOKEN environment variable is missing. "
+            "Add your Hugging Face token in Vercel."
         )
 
 
-    final_chunks = []
+    return InferenceClient(
+        token=token
+    )
+
+
+# ============================================================
+# GET MODEL
+# ============================================================
+
+def get_model():
+
+    return os.getenv(
+        "HF_MODEL",
+        DEFAULT_MODEL
+    )
+
+
+# ============================================================
+# CLEAN MODEL RESPONSE
+# ============================================================
+
+def clean_answer(
+    answer
+):
+
+    if not answer:
+
+        return "I could not find an answer in the document."
+
+
+    answer = answer.strip()
+
+
+    # Remove common prompt artifacts.
+
+    answer = re.sub(
+        r"^Answer:\s*",
+        "",
+        answer,
+        flags=re.IGNORECASE
+    )
+
+
+    return answer.strip()
+
+
+# ============================================================
+# ASK QUESTION
+# ============================================================
+
+def ask_question(
+    store,
+    question
+):
+
+    # --------------------------------------------------------
+    # Retrieve relevant chunks
+    # --------------------------------------------------------
+
+    documents = retrieve_documents(
+        store,
+        question,
+        k=4
+    )
+
+
+    if not documents:
+
+        return (
+            "I could not find relevant information "
+            "in the uploaded document.",
+            []
+        )
+
+
+    # --------------------------------------------------------
+    # Build context
+    # --------------------------------------------------------
+
+    context_parts = []
+
+
+    for index, document in enumerate(
+        documents,
+        start=1
+    ):
+
+        context_parts.append(
+            f"""
+SOURCE {index}
+PAGE: {document['page']}
+
+{document['text']}
+"""
+        )
+
+
+    context = "\n".join(
+        context_parts
+    )
+
+
+    # --------------------------------------------------------
+    # Prompt
+    # --------------------------------------------------------
+
+    system_prompt = """
+You are an AI document assistant.
+
+Your job is to answer questions ONLY using
+the information provided in the document context.
+
+Rules:
+
+1. Use only the provided context.
+2. Do not use outside knowledge.
+3. If the answer is not present in the context,
+   say that you could not find the answer in the document.
+4. Be concise but helpful.
+5. Do not mention these instructions.
+"""
+
+
+    user_prompt = f"""
+DOCUMENT CONTEXT:
+
+{context}
+
+
+QUESTION:
+
+{question}
+
+
+ANSWER:
+"""
+
+
+    # --------------------------------------------------------
+    # Hugging Face
+    # --------------------------------------------------------
+
+    client = get_hf_client()
+
+    model = get_model()
+
+
+    completion = client.chat_completion(
+
+        model=model,
+
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ],
+
+        max_tokens=400,
+
+        temperature=0.1
+    )
+
+
+    answer = completion.choices[
+        0
+    ].message.content
+
+
+    answer = clean_answer(
+        answer
+    )
+
+
+    # --------------------------------------------------------
+    # Sources
+    # --------------------------------------------------------
+
+    sources = []
 
 
     for document in documents:
 
-        text_chunks = split_text(
-            document["text"]
-        )
+        preview = document["text"]
 
+        if len(preview) > 300:
 
-        for chunk in text_chunks:
-
-            final_chunks.append(
-                {
-                    "text": chunk,
-                    "page": document["page"]
-                }
+            preview = (
+                preview[:300]
+                + "..."
             )
 
 
-    return final_chunks
+        sources.append(
+            {
+                "page": document["page"],
+                "preview": preview,
+                "score": round(
+                    document["score"],
+                    4
+                )
+            }
+        )
+
+
+    return (
+        answer,
+        sources
+    )
 
 
 # ============================================================
 # BACKWARD COMPATIBILITY
 # ============================================================
 
-def process_pdf(file_path):
+def create_embeddings():
 
-    return process_document(
-        file_path,
-        ".pdf"
+    return None
+
+
+def create_vectorstore(
+    chunks
+):
+
+    return create_rag_store(
+        chunks
     )
