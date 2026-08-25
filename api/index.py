@@ -17,7 +17,7 @@ app = FastAPI(
 
 
 # --------------------------------------------------
-# CORS
+# CORS CONFIGURATION
 # --------------------------------------------------
 
 app.add_middleware(
@@ -94,14 +94,13 @@ async def upload_document(
                 }
             )
 
-        suffix = ".pdf"
+        suffix = ".pdf" if filename.lower().endswith(".pdf") else ".txt"
 
-        if filename.lower().endswith(".txt"):
-            suffix = ".txt"
-
+        # Vercel serverless path fix: write files under /tmp directory
         with tempfile.NamedTemporaryFile(
             delete=False,
-            suffix=suffix
+            suffix=suffix,
+            dir="/tmp"
         ) as temp_file:
 
             temp_file.write(file_bytes)
@@ -109,7 +108,7 @@ async def upload_document(
 
         try:
 
-            # PDF/TXT -> chunks
+            # Extract chunks
             chunks = process_document(temp_path)
 
             if not chunks:
@@ -121,7 +120,7 @@ async def upload_document(
                     }
                 )
 
-            # chunks -> vector store
+            # Build vector store
             vectorstore = create_vectorstore(chunks)
 
             current_filename = filename
@@ -129,7 +128,8 @@ async def upload_document(
         finally:
 
             try:
-                os.remove(temp_path)
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
             except Exception:
                 pass
 
