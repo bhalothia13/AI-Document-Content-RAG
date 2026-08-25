@@ -8,7 +8,7 @@ import requests
 
 BASE_URL = st.secrets.get(
     "BACKEND_URL",
-    "https://YOUR-VERCEL-BACKEND.vercel.app"
+    "https://ai-document-content-ragss.vercel.app"
 ).rstrip("/")
 
 
