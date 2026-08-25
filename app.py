@@ -2,14 +2,19 @@ import streamlit as st
 import requests
 
 
-# ============================================================
-# CONFIG
-# ============================================================
+# --------------------------------------------------
+# BACKEND URL
+# --------------------------------------------------
 
-API_URL = (
-    "https://bhalothia13-ai-document-content-git-main-"
-    "bhalothia13s-projects.vercel.app/api"
-)
+BASE_URL = st.secrets.get(
+    "BACKEND_URL",
+    "https://YOUR-VERCEL-BACKEND.vercel.app"
+).rstrip("/")
+
+
+# --------------------------------------------------
+# PAGE CONFIG
+# --------------------------------------------------
 
 st.set_page_config(
     page_title="AI Document Intelligence RAG",
@@ -18,33 +23,24 @@ st.set_page_config(
 )
 
 
-# ============================================================
-# CUSTOM CSS
-# ============================================================
+# --------------------------------------------------
+# CSS
+# --------------------------------------------------
 
 st.markdown(
     """
     <style>
 
-    .title {
+    .main-title {
         text-align: center;
-        font-size: 40px;
+        font-size: 42px;
         font-weight: 700;
-        margin-bottom: 5px;
     }
 
     .subtitle {
         text-align: center;
-        font-size: 17px;
-        opacity: 0.75;
+        font-size: 18px;
         margin-bottom: 30px;
-    }
-
-    .answer-box {
-        padding: 20px;
-        border-radius: 14px;
-        border: 1px solid rgba(128,128,128,0.35);
-        margin-top: 15px;
     }
 
     </style>
@@ -53,12 +49,12 @@ st.markdown(
 )
 
 
-# ============================================================
+# --------------------------------------------------
 # TITLE
-# ============================================================
+# --------------------------------------------------
 
 st.markdown(
-    '<div class="title">📄 AI Document Intelligence RAG</div>',
+    '<div class="main-title">📄 AI Document Intelligence RAG</div>',
     unsafe_allow_html=True
 )
 
@@ -70,9 +66,9 @@ st.markdown(
 )
 
 
-# ============================================================
+# --------------------------------------------------
 # SESSION STATE
-# ============================================================
+# --------------------------------------------------
 
 if "uploaded" not in st.session_state:
     st.session_state.uploaded = False
@@ -81,18 +77,21 @@ if "filename" not in st.session_state:
     st.session_state.filename = ""
 
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
+# --------------------------------------------------
+# BACKEND STATUS
+# --------------------------------------------------
 
-with st.expander("Backend Status"):
+with st.expander(
+    "🔌 Backend Status",
+    expanded=True
+):
 
     if st.button("Check Backend"):
 
         try:
 
             response = requests.get(
-                f"{API_URL}/health",
+                f"{BASE_URL}/health",
                 timeout=20
             )
 
@@ -101,13 +100,20 @@ with st.expander("Backend Status"):
                 data = response.json()
 
                 st.success(
-                    f"Backend online: {data.get('status', 'OK')}"
+                    "Backend connected successfully."
                 )
+
+                st.json(data)
 
             else:
 
                 st.error(
-                    f"Backend returned {response.status_code}"
+                    f"Backend returned HTTP "
+                    f"{response.status_code}"
+                )
+
+                st.code(
+                    response.text[:1000]
                 )
 
         except Exception as e:
@@ -117,9 +123,9 @@ with st.expander("Backend Status"):
             )
 
 
-# ============================================================
+# --------------------------------------------------
 # DOCUMENT UPLOAD
-# ============================================================
+# --------------------------------------------------
 
 st.header("1. 📤 Document Upload")
 
@@ -151,29 +157,24 @@ if uploaded_file:
                 }
 
                 response = requests.post(
-                    f"{API_URL}/upload",
+                    f"{BASE_URL}/upload",
                     files=files,
                     timeout=120
                 )
 
-                # --------------------------------------------
-                # HTML RESPONSE PROTECTION
-                # --------------------------------------------
-
                 content_type = response.headers.get(
                     "content-type",
                     ""
-                ).lower()
+                )
 
-                if "text/html" in content_type:
+                if "application/json" not in content_type:
 
                     st.error(
-                        "❌ Backend returned HTML instead of JSON."
+                        "Backend returned HTML instead of JSON."
                     )
 
                     st.code(
-                        response.text[:1000],
-                        language="html"
+                        response.text[:1000]
                     )
 
                 elif response.status_code == 200:
@@ -181,165 +182,140 @@ if uploaded_file:
                     data = response.json()
 
                     st.session_state.uploaded = True
+
                     st.session_state.filename = (
-                        uploaded_file.name
+                        data.get(
+                            "filename",
+                            uploaded_file.name
+                        )
                     )
 
                     st.success(
-                        data.get(
-                            "message",
-                            "Document uploaded successfully!"
-                        )
+                        "Document uploaded and indexed successfully!"
                     )
 
-                    if data.get("chunks") is not None:
-
-                        st.info(
-                            f"📚 Created "
-                            f"{data['chunks']} text chunks."
-                        )
+                    st.write(
+                        f"Chunks created: "
+                        f"{data.get('chunks', 'N/A')}"
+                    )
 
                 else:
 
                     try:
-                        error_data = response.json()
-                        error_message = error_data.get(
-                            "detail",
-                            str(error_data)
-                        )
-                    except Exception:
-                        error_message = response.text[:500]
+                        data = response.json()
 
-                    st.error(
-                        f"❌ Upload failed "
-                        f"({response.status_code}): "
-                        f"{error_message}"
-                    )
+                        st.error(
+                            data.get(
+                                "error",
+                                "Upload failed."
+                            )
+                        )
+
+                    except Exception:
+
+                        st.error(
+                            f"Upload failed: "
+                            f"HTTP {response.status_code}"
+                        )
 
             except requests.exceptions.Timeout:
 
                 st.error(
-                    "⏱️ Upload timed out. "
-                    "The document may be too large."
-                )
-
-            except requests.exceptions.RequestException as e:
-
-                st.error(
-                    f"❌ Connection error: {e}"
+                    "Backend timeout. "
+                    "Please try again."
                 )
 
             except Exception as e:
 
                 st.error(
-                    f"❌ Unexpected error: {e}"
+                    f"Connection error: {e}"
                 )
 
 
-# ============================================================
+# --------------------------------------------------
 # ACTIVE DOCUMENT
-# ============================================================
+# --------------------------------------------------
 
 if st.session_state.uploaded:
 
-    st.success(
+    st.info(
         f"📄 Active Document: "
         f"**{st.session_state.filename}**"
     )
 
 
-# ============================================================
-# QUESTION
-# ============================================================
+# --------------------------------------------------
+# ASK QUESTION
+# --------------------------------------------------
 
 st.header("2. 🤖 Ask Question")
 
 question = st.text_area(
     "Enter your question:",
-    placeholder=(
-        "Example: What is the main topic of this document?"
-    ),
-    height=100
+    placeholder="Example: What is the main topic of this document?"
 )
 
 
 if st.button(
-    "🔍 Submit Question",
+    "🔎 Submit Question",
     use_container_width=True
 ):
 
     if not st.session_state.uploaded:
 
         st.warning(
-            "⚠️ Please upload a document first."
+            "Please upload a document first."
         )
 
     elif not question.strip():
 
         st.warning(
-            "⚠️ Please enter a question."
+            "Please enter a question."
         )
 
     else:
 
         with st.spinner(
-            "🔎 Searching document and generating answer..."
+            "Searching document and generating answer..."
         ):
 
             try:
 
                 response = requests.post(
-                    f"{API_URL}/chat",
-                    json={
-                        "question": question.strip()
+                    f"{BASE_URL}/chat",
+                    data={
+                        "question": question
                     },
                     timeout=120
                 )
 
-                # --------------------------------------------
-                # HTML RESPONSE PROTECTION
-                # --------------------------------------------
-
                 content_type = response.headers.get(
                     "content-type",
                     ""
-                ).lower()
+                )
 
-                if "text/html" in content_type:
+                if "application/json" not in content_type:
 
                     st.error(
-                        "❌ Vercel returned an HTML page "
-                        "instead of the FastAPI response."
+                        "Backend returned HTML instead of JSON."
                     )
 
                     st.code(
-                        response.text[:1000],
-                        language="html"
+                        response.text[:1000]
                     )
 
                 elif response.status_code == 200:
 
                     data = response.json()
 
-                    answer = data.get(
-                        "answer",
-                        "No answer returned."
+                    st.subheader("Answer")
+
+                    st.write(
+                        data.get(
+                            "answer",
+                            "No answer returned."
+                        )
                     )
-
-                    st.subheader("💡 Answer")
-
-                    st.markdown(
-                        f"""
-                        <div class="answer-box">
-                        {answer}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                    # ----------------------------------------
-                    # SOURCES
-                    # ----------------------------------------
 
                     sources = data.get(
                         "sources",
@@ -348,102 +324,85 @@ if st.button(
 
                     if sources:
 
-                        st.subheader("📚 Sources")
+                        st.subheader("Sources")
 
-                        for source in sources:
-
-                            page = source.get(
-                                "page",
-                                "Unknown"
+                        pages = sorted(
+                            set(
+                                str(
+                                    source.get("page")
+                                )
+                                for source in sources
+                                if source.get("page") is not None
                             )
+                        )
 
-                            preview = source.get(
-                                "preview",
-                                ""
-                            )
+                        if pages:
 
-                            st.markdown(
-                                f"""
-                                **Page:** {page}
-
-                                > {preview}
-                                """
+                            st.write(
+                                "Pages: "
+                                + ", ".join(pages)
                             )
 
                 else:
 
                     try:
 
-                        error_data = response.json()
+                        data = response.json()
 
-                        error_message = error_data.get(
-                            "detail",
-                            str(error_data)
+                        st.error(
+                            data.get(
+                                "error",
+                                "Backend error."
+                            )
                         )
 
                     except Exception:
 
-                        error_message = response.text[:500]
-
-                    st.error(
-                        f"❌ Backend Error "
-                        f"({response.status_code})"
-                    )
-
-                    st.code(
-                        error_message
-                    )
+                        st.error(
+                            f"Backend Error: "
+                            f"HTTP {response.status_code}"
+                        )
 
             except requests.exceptions.Timeout:
 
                 st.error(
-                    "⏱️ Request timed out. "
+                    "Request timed out. "
                     "Please try again."
-                )
-
-            except requests.exceptions.RequestException as e:
-
-                st.error(
-                    f"❌ Connection error: {e}"
                 )
 
             except Exception as e:
 
                 st.error(
-                    f"❌ Unexpected error: {e}"
+                    f"Connection error: {e}"
                 )
 
 
-# ============================================================
+# --------------------------------------------------
 # EXAMPLES
-# ============================================================
+# --------------------------------------------------
 
 st.divider()
 
 st.subheader("💡 Example Questions")
 
-examples = [
-    "What is the main topic of this document?",
-    "Explain the important concepts mentioned in the document.",
-    "What are the key points?",
-    "Summarize this document.",
-    "What does the document say about deep learning?"
-]
-
-for example in examples:
-
-    st.markdown(
-        f"- `{example}`"
-    )
+st.markdown(
+    """
+- What is the main topic of this document?
+- What are the important concepts?
+- Explain the first chapter.
+- What does the document say about machine learning?
+- Give me a summary of this document.
+"""
+)
 
 
-# ============================================================
+# --------------------------------------------------
 # FOOTER
-# ============================================================
+# --------------------------------------------------
 
 st.divider()
 
 st.caption(
     "Built with Python • FastAPI • RAG • "
-    "Hugging Face • Streamlit"
+    "FAISS • Hugging Face • Streamlit"
 )
