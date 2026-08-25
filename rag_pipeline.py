@@ -1,389 +1,188 @@
 import os
-import re
+import requests
 
-from huggingface_hub import InferenceClient
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-from sklearn.metrics.pairwise import cosine_similarity
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 
-# ============================================================
-# MODEL
-# ============================================================
+# --------------------------------------------------
+# MODELS
+# --------------------------------------------------
 
-# You can change this later from Vercel Environment Variables.
-#
-# IMPORTANT:
-# Do NOT load this model locally with transformers.
-#
-DEFAULT_MODEL = (
-    "Qwen/Qwen2.5-7B-Instruct"
-)
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Small model for API-based inference
+LLM_MODEL = "Qwen/Qwen2.5-1.5B"
 
 
-# ============================================================
-# RAG STORE
-# ============================================================
+# --------------------------------------------------
+# EMBEDDINGS
+# --------------------------------------------------
 
-class RAGStore:
+def create_embeddings():
 
-    def __init__(
-        self,
-        chunks
-    ):
-
-        if not chunks:
-
-            raise ValueError(
-                "No document chunks were provided."
-            )
-
-
-        self.chunks = chunks
-
-
-        self.texts = [
-            chunk["text"]
-            for chunk in chunks
-        ]
-
-
-        # ----------------------------------------------------
-        # TF-IDF vector database
-        # ----------------------------------------------------
-
-        self.vectorizer = TfidfVectorizer(
-            lowercase=True,
-            stop_words="english",
-            max_features=12000,
-            ngram_range=(1, 2)
-        )
-
-
-        self.matrix = self.vectorizer.fit_transform(
-            self.texts
-        )
-
-
-# ============================================================
-# CREATE RAG STORE
-# ============================================================
-
-def create_rag_store(
-    chunks
-):
-
-    return RAGStore(
-        chunks
+    embeddings = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={
+            "device": "cpu"
+        },
+        encode_kwargs={
+            "normalize_embeddings": True
+        }
     )
 
+    return embeddings
 
-# ============================================================
-# RETRIEVE DOCUMENTS
-# ============================================================
 
-def retrieve_documents(
-    store,
-    question,
-    k=4
-):
+# --------------------------------------------------
+# VECTOR STORE
+# --------------------------------------------------
 
-    question_vector = store.vectorizer.transform(
-        [question]
+def create_vectorstore(chunks):
+
+    embeddings = create_embeddings()
+
+    vectorstore = FAISS.from_documents(
+        chunks,
+        embeddings
     )
 
-
-    scores = cosine_similarity(
-        question_vector,
-        store.matrix
-    )[0]
+    return vectorstore
 
 
-    ranked_indexes = scores.argsort()[::-1]
+# --------------------------------------------------
+# HUGGING FACE LLM
+# --------------------------------------------------
 
+def call_huggingface(prompt):
 
-    selected = []
+    hf_token = os.getenv("HF_TOKEN")
 
-
-    for index in ranked_indexes[:k]:
-
-        score = float(
-            scores[index]
-        )
-
-
-        if score <= 0:
-            continue
-
-
-        chunk = store.chunks[
-            int(index)
-        ]
-
-
-        selected.append(
-            {
-                "text": chunk["text"],
-                "page": chunk.get(
-                    "page",
-                    "Unknown"
-                ),
-                "score": score
-            }
-        )
-
-
-    return selected
-
-
-# ============================================================
-# HUGGING FACE CLIENT
-# ============================================================
-
-def get_hf_client():
-
-    token = os.getenv(
-        "HF_TOKEN"
-    )
-
-
-    if not token:
+    if not hf_token:
 
         raise RuntimeError(
-            "HF_TOKEN environment variable is missing. "
-            "Add your Hugging Face token in Vercel."
+            "HF_TOKEN is not configured in Vercel Environment Variables."
         )
 
+    url = "https://router.huggingface.co/v1/chat/completions"
 
-    return InferenceClient(
-        token=token
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI document assistant. "
+                    "Answer only using the provided context. "
+                    "If the answer is not in the context, "
+                    "say that you could not find the answer "
+                    "in the document."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 400,
+        "stream": False
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=60
     )
 
+    if response.status_code != 200:
 
-# ============================================================
-# GET MODEL
-# ============================================================
+        raise RuntimeError(
+            f"Hugging Face API error "
+            f"{response.status_code}: "
+            f"{response.text[:500]}"
+        )
 
-def get_model():
+    data = response.json()
 
-    return os.getenv(
-        "HF_MODEL",
-        DEFAULT_MODEL
-    )
-
-
-# ============================================================
-# CLEAN MODEL RESPONSE
-# ============================================================
-
-def clean_answer(
-    answer
-):
-
-    if not answer:
-
-        return "I could not find an answer in the document."
+    return data["choices"][0]["message"]["content"]
 
 
-    answer = answer.strip()
-
-
-    # Remove common prompt artifacts.
-
-    answer = re.sub(
-        r"^Answer:\s*",
-        "",
-        answer,
-        flags=re.IGNORECASE
-    )
-
-
-    return answer.strip()
-
-
-# ============================================================
+# --------------------------------------------------
 # ASK QUESTION
-# ============================================================
+# --------------------------------------------------
 
-def ask_question(
-    store,
-    question
-):
+def ask_question(vectorstore, question):
 
-    # --------------------------------------------------------
-    # Retrieve relevant chunks
-    # --------------------------------------------------------
-
-    documents = retrieve_documents(
-        store,
+    docs = vectorstore.similarity_search(
         question,
         k=4
     )
 
-
-    if not documents:
+    if not docs:
 
         return (
             "I could not find relevant information "
-            "in the uploaded document.",
+            "in the document.",
             []
         )
 
-
-    # --------------------------------------------------------
-    # Build context
-    # --------------------------------------------------------
-
     context_parts = []
 
+    sources = []
 
-    for index, document in enumerate(
-        documents,
-        start=1
-    ):
+    for doc in docs:
 
         context_parts.append(
-            f"""
-SOURCE {index}
-PAGE: {document['page']}
-
-{document['text']}
-"""
+            doc.page_content
         )
 
+        page = doc.metadata.get(
+            "page",
+            None
+        )
 
-    context = "\n".join(
+        if isinstance(page, int):
+
+            page_number = page + 1
+
+        else:
+
+            page_number = page
+
+        sources.append({
+            "page": page_number
+        })
+
+    context = "\n\n---\n\n".join(
         context_parts
     )
 
+    prompt = f"""
+Use ONLY the following document context.
 
-    # --------------------------------------------------------
-    # Prompt
-    # --------------------------------------------------------
+Do not use outside knowledge.
 
-    system_prompt = """
-You are an AI document assistant.
+If the answer is not present in the context,
+say:
 
-Your job is to answer questions ONLY using
-the information provided in the document context.
+"I could not find the answer in the document."
 
-Rules:
-
-1. Use only the provided context.
-2. Do not use outside knowledge.
-3. If the answer is not present in the context,
-   say that you could not find the answer in the document.
-4. Be concise but helpful.
-5. Do not mention these instructions.
-"""
-
-
-    user_prompt = f"""
 DOCUMENT CONTEXT:
-
 {context}
 
-
 QUESTION:
-
 {question}
-
 
 ANSWER:
 """
 
+    answer = call_huggingface(prompt)
 
-    # --------------------------------------------------------
-    # Hugging Face
-    # --------------------------------------------------------
-
-    client = get_hf_client()
-
-    model = get_model()
-
-
-    completion = client.chat_completion(
-
-        model=model,
-
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
-
-        max_tokens=400,
-
-        temperature=0.1
-    )
-
-
-    answer = completion.choices[
-        0
-    ].message.content
-
-
-    answer = clean_answer(
-        answer
-    )
-
-
-    # --------------------------------------------------------
-    # Sources
-    # --------------------------------------------------------
-
-    sources = []
-
-
-    for document in documents:
-
-        preview = document["text"]
-
-        if len(preview) > 300:
-
-            preview = (
-                preview[:300]
-                + "..."
-            )
-
-
-        sources.append(
-            {
-                "page": document["page"],
-                "preview": preview,
-                "score": round(
-                    document["score"],
-                    4
-                )
-            }
-        )
-
-
-    return (
-        answer,
-        sources
-    )
-
-
-# ============================================================
-# BACKWARD COMPATIBILITY
-# ============================================================
-
-def create_embeddings():
-
-    return None
-
-
-def create_vectorstore(
-    chunks
-):
-
-    return create_rag_store(
-        chunks
-    )
+    return answer, sources
