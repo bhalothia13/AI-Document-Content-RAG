@@ -1,31 +1,6 @@
-# Virtual Environment
-.venv/
-venv/
-venv3/
-
-# Python Cache
 __pycache__/
 *.pyc
-
-# Environment Variables
 .env
-
-# VS Code
-.vscode/
-
-# Streamlit Secrets
+.venv/
+venv/
 .streamlit/secrets.toml
-
-# Uploaded Documents
-data/documents/
-
-# FAISS / Vector Database
-faiss_index/
-vectorstore/
-
-# Logs
-*.log
-
-# OS Files
-.DS_Store
-Thumbs.db
