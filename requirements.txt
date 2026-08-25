@@ -1,12 +1,8 @@
 fastapi
-mangum
 pydantic
-python-dotenv
-requests
 python-multipart
-langchain
-langchain-core
-langchain-community
+requests
+python-dotenv
 huggingface-hub
 pypdf
-chromadb
+scikit-learn
