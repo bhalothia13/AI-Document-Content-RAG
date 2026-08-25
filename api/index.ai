@@ -54,12 +54,12 @@ class ChatRequest(BaseModel):
 # HOME
 # ============================================================
 
-@app.get("/api")
-async def home():
-
+@app.get("/api/health")
+async def health():
     return {
-        "message": "AI Document Intelligence RAG API",
-        "status": "online"
+        "status": "healthy",
+        "document_loaded": rag_store is not None,
+        "filename": current_filename
     }
 
 
