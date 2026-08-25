@@ -1,193 +1,219 @@
-import torch
+import os
 
-from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    pipeline
-)
+from pathlib import Path
 
-from langchain_huggingface import (
-    HuggingFaceEmbeddings,
-    HuggingFacePipeline
-)
-
-from langchain_community.vectorstores import FAISS
-
-from langchain_core.prompts import PromptTemplate
-
-from document_processor import process_pdf
+from pypdf import PdfReader
 
 
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# ============================================================
+# TEXT CLEANING
+# ============================================================
 
-LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+def clean_text(text):
+
+    if not text:
+        return ""
+
+    text = text.replace(
+        "\x00",
+        " "
+    )
+
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+    ]
+
+    lines = [
+        line
+        for line in lines
+        if line
+    ]
+
+    return "\n".join(lines)
 
 
-def create_embeddings():
+# ============================================================
+# PDF LOADER
+# ============================================================
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={
-            "device": "cpu"
-        },
-        encode_kwargs={
-            "normalize_embeddings": True
+def load_pdf(file_path):
+
+    reader = PdfReader(
+        str(file_path)
+    )
+
+    documents = []
+
+    for page_number, page in enumerate(
+        reader.pages
+    ):
+
+        text = page.extract_text() or ""
+
+        text = clean_text(
+            text
+        )
+
+        if text:
+
+            documents.append(
+                {
+                    "text": text,
+                    "page": page_number + 1
+                }
+            )
+
+    return documents
+
+
+# ============================================================
+# TXT LOADER
+# ============================================================
+
+def load_txt(file_path):
+
+    path = Path(
+        file_path
+    )
+
+    text = path.read_text(
+        encoding="utf-8",
+        errors="ignore"
+    )
+
+    text = clean_text(
+        text
+    )
+
+    if not text:
+        return []
+
+    return [
+        {
+            "text": text,
+            "page": 1
         }
-    )
-
-    return embeddings
+    ]
 
 
-def create_vectorstore(chunks):
+# ============================================================
+# TEXT CHUNKING
+# ============================================================
 
-    embeddings = create_embeddings()
+def split_text(
+    text,
+    chunk_size=1200,
+    chunk_overlap=200
+):
 
-    vectorstore = FAISS.from_documents(
-        chunks,
-        embeddings
-    )
+    text = text.strip()
 
-    return vectorstore
-
-
-def load_llm():
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        LLM_MODEL
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        LLM_MODEL,
-        dtype=torch.float32
-    )
-
-    generator = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        max_new_tokens=256,
-        do_sample=False,
-        repetition_penalty=1.1
-    )
-
-    return HuggingFacePipeline(
-        pipeline=generator
-    )
+    if not text:
+        return []
 
 
-def create_prompt():
+    chunks = []
 
-    template = """
-You are an AI document assistant.
+    start = 0
 
-Use ONLY the context below to answer the question.
-
-If the answer is not available in the context,
-say that you could not find the answer.
-
-Do not use outside knowledge.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-"""
-
-    return PromptTemplate(
-        template=template,
-        input_variables=[
-            "context",
-            "question"
-        ]
-    )
+    text_length = len(text)
 
 
-def ask_question(vectorstore, llm, question):
+    while start < text_length:
 
-    docs = vectorstore.similarity_search(
-        question,
-        k=4
-    )
-
-    context = "\n\n".join(
-        doc.page_content
-        for doc in docs
-    )
-
-    prompt = create_prompt()
-
-    final_prompt = prompt.format(
-        context=context,
-        question=question
-    )
-
-    response = llm.invoke(
-        final_prompt
-    )
-
-    return response, docs
-
-if __name__ == "__main__":
-
-    from pathlib import Path
-
-    print("Loading PDF...")
-
-    pdf_path = Path(
-        r"C:\Users\Sumit\OneDrive\Desktop\AI-Document-RAG\dl-curriculum.pdf"
-    )
-
-    # 1. PDF → chunks
-    chunks = process_pdf(pdf_path)
-
-    print(f"Total chunks: {len(chunks)}")
-
-    # 2. Chunks → FAISS
-    print("\nCreating embeddings and vector database...")
-
-    vectorstore = create_vectorstore(chunks)
-
-    print("Vector database created successfully!")
-
-    # 3. Load Hugging Face model
-    print("\nLoading Hugging Face model...")
-
-    llm = load_llm()
-
-    print("LLM loaded successfully!")
-
-    # 4. Ask question
-    question = input(
-        "\nAsk a question about your PDF: "
-    )
-
-    # 5. RAG
-    response, docs = ask_question(
-        vectorstore,
-        llm,
-        question
-    )
-
-    print("\n==============================")
-    print("ANSWER")
-    print("==============================")
-
-    print(response)
-
-    print("\n==============================")
-    print("SOURCES")
-    print("==============================")
-
-    for doc in docs:
-
-        page = doc.metadata.get(
-            "page",
-            "Unknown"
+        end = min(
+            start + chunk_size,
+            text_length
         )
 
-        print(
-            f"Page: {page + 1 if isinstance(page, int) else page}"
+
+        chunk = text[
+            start:end
+        ].strip()
+
+
+        if chunk:
+
+            chunks.append(
+                chunk
+            )
+
+
+        if end >= text_length:
+            break
+
+
+        start = max(
+            end - chunk_overlap,
+            start + 1
         )
+
+
+    return chunks
+
+
+# ============================================================
+# COMPLETE DOCUMENT PROCESSOR
+# ============================================================
+
+def process_document(
+    file_path,
+    extension
+):
+
+    extension = extension.lower()
+
+
+    if extension == ".pdf":
+
+        documents = load_pdf(
+            file_path
+        )
+
+    elif extension == ".txt":
+
+        documents = load_txt(
+            file_path
+        )
+
+    else:
+
+        raise ValueError(
+            "Unsupported file type."
+        )
+
+
+    final_chunks = []
+
+
+    for document in documents:
+
+        text_chunks = split_text(
+            document["text"]
+        )
+
+
+        for chunk in text_chunks:
+
+            final_chunks.append(
+                {
+                    "text": chunk,
+                    "page": document["page"]
+                }
+            )
+
+
+    return final_chunks
+
+
+# ============================================================
+# BACKWARD COMPATIBILITY
+# ============================================================
+
+def process_pdf(file_path):
+
+    return process_document(
+        file_path,
+        ".pdf"
+    )
