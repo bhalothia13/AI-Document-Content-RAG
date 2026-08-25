@@ -1,151 +1,191 @@
 import os
 import tempfile
+import requests
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 from document_processor import process_document
-from rag_pipeline import create_rag_store, ask_question
+from rag_pipeline import create_vectorstore, ask_question
 
 
 app = FastAPI(
-    title="AI Document Intelligence RAG API"
+    title="AI Document Intelligence RAG API",
+    version="1.0.0"
 )
 
+
+# --------------------------------------------------
+# CORS
+# --------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-rag_store = None
+# --------------------------------------------------
+# GLOBAL VECTORSTORE
+# --------------------------------------------------
+
+vectorstore = None
 current_filename = None
 
 
-class ChatRequest(BaseModel):
-    question: str
+# --------------------------------------------------
+# HEALTH CHECK
+# --------------------------------------------------
 
-
-@app.get("/api/health")
-async def health():
-
+@app.get("/")
+def root():
     return {
-        "status": "healthy",
-        "document_loaded": rag_store is not None,
+        "status": "success",
+        "message": "AI Document Intelligence RAG API is running"
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "document_loaded": vectorstore is not None,
         "filename": current_filename
     }
 
 
-@app.post("/api/upload")
+# --------------------------------------------------
+# UPLOAD DOCUMENT
+# --------------------------------------------------
+
+@app.post("/upload")
 async def upload_document(
     file: UploadFile = File(...)
 ):
 
-    global rag_store
+    global vectorstore
     global current_filename
 
-    if not file.filename:
-        raise HTTPException(
+    filename = file.filename or ""
+
+    if not filename.lower().endswith((".pdf", ".txt")):
+        return JSONResponse(
             status_code=400,
-            detail="No file selected."
-        )
-
-    extension = os.path.splitext(
-        file.filename
-    )[1].lower()
-
-    if extension not in [".pdf", ".txt"]:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Only PDF and TXT files are supported."
+            content={
+                "success": False,
+                "error": "Only PDF and TXT files are supported."
+            }
         )
 
     try:
 
-        file_data = await file.read()
+        file_bytes = await file.read()
+
+        if not file_bytes:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Uploaded file is empty."
+                }
+            )
+
+        suffix = ".pdf"
+
+        if filename.lower().endswith(".txt"):
+            suffix = ".txt"
 
         with tempfile.NamedTemporaryFile(
             delete=False,
-            suffix=extension
-        ) as temp:
+            suffix=suffix
+        ) as temp_file:
 
-            temp.write(file_data)
-            temp_path = temp.name
+            temp_file.write(file_bytes)
+            temp_path = temp_file.name
 
         try:
 
-            chunks = process_document(
-                temp_path,
-                extension
-            )
+            # PDF/TXT -> chunks
+            chunks = process_document(temp_path)
 
             if not chunks:
-
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail="No text could be extracted."
+                    content={
+                        "success": False,
+                        "error": "No text could be extracted from the document."
+                    }
                 )
 
-            rag_store = create_rag_store(
-                chunks
-            )
+            # chunks -> vector store
+            vectorstore = create_vectorstore(chunks)
 
-            current_filename = file.filename
-
-            return {
-                "success": True,
-                "message": "Document uploaded successfully.",
-                "filename": file.filename,
-                "chunks": len(chunks)
-            }
+            current_filename = filename
 
         finally:
 
-            if os.path.exists(temp_path):
+            try:
                 os.remove(temp_path)
+            except Exception:
+                pass
 
-    except HTTPException:
-        raise
+        return {
+            "success": True,
+            "message": "Document uploaded and indexed successfully.",
+            "filename": filename,
+            "chunks": len(chunks)
+        }
 
     except Exception as e:
 
-        raise HTTPException(
+        return JSONResponse(
             status_code=500,
-            detail=str(e)
+            content={
+                "success": False,
+                "error": str(e)
+            }
         )
 
 
-@app.post("/api/chat")
+# --------------------------------------------------
+# CHAT
+# --------------------------------------------------
+
+@app.post("/chat")
 async def chat(
-    request: ChatRequest
+    question: str = Form(...)
 ):
 
-    if rag_store is None:
+    global vectorstore
 
-        raise HTTPException(
+    if vectorstore is None:
+
+        return JSONResponse(
             status_code=400,
-            detail="Please upload a document first."
+            content={
+                "success": False,
+                "error": "Please upload a document first."
+            }
         )
 
-    question = request.question.strip()
+    if not question.strip():
 
-    if not question:
-
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="Question cannot be empty."
+            content={
+                "success": False,
+                "error": "Question cannot be empty."
+            }
         )
 
     try:
 
         answer, sources = ask_question(
-            rag_store,
+            vectorstore,
             question
         )
 
@@ -157,7 +197,10 @@ async def chat(
 
     except Exception as e:
 
-        raise HTTPException(
+        return JSONResponse(
             status_code=500,
-            detail=str(e)
+            content={
+                "success": False,
+                "error": str(e)
+            }
         )
