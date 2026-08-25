@@ -1,0 +1,261 @@
+import os
+import tempfile
+from typing import Optional
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from document_processor import process_document
+from rag_pipeline import create_rag_store, ask_question
+
+
+# ============================================================
+# FASTAPI APP
+# ============================================================
+
+app = FastAPI(
+    title="AI Document Intelligence RAG API",
+    version="1.0.0"
+)
+
+
+# ============================================================
+# CORS
+# ============================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============================================================
+# GLOBAL RAG STORE
+# ============================================================
+
+rag_store = None
+current_filename: Optional[str] = None
+
+
+# ============================================================
+# REQUEST MODEL
+# ============================================================
+
+class ChatRequest(BaseModel):
+
+    question: str
+
+
+# ============================================================
+# HOME
+# ============================================================
+
+@app.get("/api")
+async def home():
+
+    return {
+        "message": "AI Document Intelligence RAG API",
+        "status": "online"
+    }
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/api/health")
+async def health():
+
+    return {
+        "status": "healthy",
+        "document_loaded": rag_store is not None,
+        "filename": current_filename
+    }
+
+
+# ============================================================
+# UPLOAD DOCUMENT
+# ============================================================
+
+@app.post("/api/upload")
+async def upload_document(
+    file: UploadFile = File(...)
+):
+
+    global rag_store
+    global current_filename
+
+    if not file.filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="No filename provided."
+        )
+
+
+    allowed_extensions = [
+        ".pdf",
+        ".txt"
+    ]
+
+    extension = os.path.splitext(
+        file.filename
+    )[1].lower()
+
+
+    if extension not in allowed_extensions:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF and TXT files are supported."
+        )
+
+
+    try:
+
+        file_bytes = await file.read()
+
+        if not file_bytes:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file is empty."
+            )
+
+
+        # ----------------------------------------------------
+        # Temporary file
+        # ----------------------------------------------------
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=extension
+        ) as temp_file:
+
+            temp_file.write(file_bytes)
+
+            temp_path = temp_file.name
+
+
+        try:
+
+            # ------------------------------------------------
+            # Process document
+            # ------------------------------------------------
+
+            chunks = process_document(
+                temp_path,
+                extension
+            )
+
+
+            if not chunks:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not extract text from document."
+                )
+
+
+            # ------------------------------------------------
+            # Create RAG store
+            # ------------------------------------------------
+
+            new_store = create_rag_store(
+                chunks
+            )
+
+
+            # ------------------------------------------------
+            # Save globally
+            # ------------------------------------------------
+
+            rag_store = new_store
+            current_filename = file.filename
+
+
+            return {
+                "success": True,
+                "message": (
+                    "Document uploaded and indexed successfully."
+                ),
+                "filename": file.filename,
+                "chunks": len(chunks)
+            }
+
+
+        finally:
+
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+    except HTTPException:
+
+        raise
+
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Document processing failed: {str(e)}"
+        )
+
+
+# ============================================================
+# CHAT
+# ============================================================
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+
+    global rag_store
+
+
+    if rag_store is None:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a document first."
+        )
+
+
+    question = request.question.strip()
+
+
+    if not question:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty."
+        )
+
+
+    try:
+
+        answer, sources = ask_question(
+            rag_store,
+            question
+        )
+
+
+        return {
+            "success": True,
+            "answer": answer,
+            "sources": sources
+        }
+
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Question processing failed: {str(e)}"
+        )
